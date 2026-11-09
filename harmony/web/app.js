@@ -103,6 +103,44 @@ let lyricId = '', lyricLines = [], lyricMessage = '选择一首歌，开始聆�
 let downloads = [];
 const openedFiles = new Map(), fileFavorites = new Set(), favoriteBusy = new Set();
 let continuingTrack = null;
+const selectedTracks = new Set();
+let selectionAnchor = '', displayedTracks = [], selectionBusy = false, favoritesSnapshot = null;
+const failedTracks = new Set();
+let pendingSeek = null, lastPlaybackSave = 0;
+const defaultShortcuts = { 'toggle-play': 'Space', previous: 'Alt+ArrowLeft', next: 'Alt+ArrowRight', search: 'Ctrl+K', 'new-list': 'Ctrl+N' };
+let shortcuts = { ...defaultShortcuts }, closeAction = 'tray';
+try { closeAction = localStorage.getItem('harmony-close-action') || 'tray'; } catch {}
+try { shortcuts = { ...defaultShortcuts, ...JSON.parse(localStorage.getItem('harmony-shortcuts') || '{}') }; } catch {}
+function playbackKey() { return user ? `harmony-playback-${user.id}` : ''; }
+function savePlayback() {
+  if (!user || !currentId) return;
+  const state = { id: currentId, queue, position: pendingSeek ?? (audio.currentTime || 0), mode: playbackMode, volume: audio.volume };
+  if (window.harmonyDesktop?.savePlayback) window.harmonyDesktop.savePlayback(playbackKey(), state);
+  else try { localStorage.setItem(playbackKey(), JSON.stringify(state)); } catch {}
+}
+async function restorePlayback() {
+  try {
+    const saved = window.harmonyDesktop?.getPlayback ? await window.harmonyDesktop.getPlayback(playbackKey()) : JSON.parse(localStorage.getItem(playbackKey()) || 'null');
+    if (!saved || !track(saved.id) || !Array.isArray(saved.queue)) return;
+    queue = [...new Set(saved.queue.filter(id => typeof id === 'string' && track(id)))];
+    currentId = saved.id;
+    if (!queue.includes(currentId)) queue.unshift(currentId);
+    playbackMode = [0, 1, 2].includes(saved.mode) ? saved.mode : 0;
+    pendingSeek = Number.isFinite(saved.position) ? Math.max(0, saved.position) : 0;
+    audio.volume = Number.isFinite(saved.volume) ? Math.max(0, Math.min(1, saved.volume)) : .7;
+    $('volume').value = audio.volume;
+    if (!track(currentId).localReference) audio.src = `/api/tracks/${currentId}/audio`;
+    renderPlayer(); renderContent();
+  } catch {}
+}
+function applyPendingSeek() {
+  if (pendingSeek === null || !Number.isFinite(audio.duration)) return;
+  audio.currentTime = Math.min(pendingSeek, Math.max(0, audio.duration - .05));
+  pendingSeek = null;
+}
+function shortcutValue(event) {
+  return [event.ctrlKey || event.metaKey ? 'Ctrl' : '', event.altKey ? 'Alt' : '', event.shiftKey ? 'Shift' : '', event.code === 'Space' ? 'Space' : event.key.length === 1 ? event.key.toUpperCase() : event.key].filter(Boolean).join('+');
+}
 function platformLogo(source) {
   const label = provider(source);
   if (source === 'local') return `<span class="source-logo local-logo" role="img" aria-label="${label}" title="${label}">${icon('music')}</span>`;
@@ -115,16 +153,27 @@ function favoriteButton(t) {
   const liked = library.favorites.includes(t.id);
   return ib('heart', liked ? '取消喜欢' : '喜欢这首歌', 'favorite', t.id, `aria-pressed="${liked}"`);
 }
+async function storedTrackIds(ids) {
+  const references = ids.filter(id => openedFiles.has(id));
+  const mapped = new Map();
+  for (let offset = 0; offset < references.length; offset += 100) {
+    const chunk = references.slice(offset, offset + 100);
+    const result = await api('/tracks/references', 'POST', { tracks: chunk.map(id => ({ referenceId: id, title: track(id).title })) });
+    result.tracks.forEach(t => mapped.set(t.providerId, t.id));
+  }
+  return ids.map(id => mapped.get(id) || id);
+}
 async function toggleFavorite(id, value = !library.favorites.includes(id)) {
   if (favoriteBusy.has(id)) return;
   favoriteBusy.add(id);
   try {
     if (continuingTrack?.id === id && !openedFiles.has(id)) return toast('这首歌来自本地模式，请在账号中搜索后收藏');
+    const [storedId] = await storedTrackIds([id]);
+    await api(`/tracks/${storedId}/favorite`, 'PUT', { favorite: value });
     if (openedFiles.has(id)) { if (value) fileFavorites.add(id); else fileFavorites.delete(id); }
-    else { await api(`/tracks/${id}/favorite`, 'PUT', { favorite: value }); await refresh(false); }
+    await refresh(false);
     library.favorites = value ? [...new Set([...library.favorites, id])] : library.favorites.filter(x => x !== id);
     renderNav();
-    if (page === 'favorites' || page === 'tracks') renderContent();
     document.querySelectorAll('[data-action="favorite"]').forEach(button => {
       const liked = library.favorites.includes(button.dataset.id);
       button.setAttribute('aria-pressed', liked);
@@ -161,7 +210,8 @@ const track = id => library.tracks.find(t => t.id === id);
 function collectionTracks() {
   const ids = new Set(library.collectionTrackIds || library.playlists.flatMap(p => p.trackIds || []));
   library.favorites.forEach(id => ids.add(id));
-  return library.tracks.filter(t => !(continuingTrack?.id === t.id && !openedFiles.has(t.id)) && (ids.has(t.id) || t.provider === 'local' || openedFiles.has(t.id)));
+  const registeredReferences = new Set(library.tracks.filter(t => t.provider === 'local' && t.providerId?.startsWith('file-')).map(t => t.providerId));
+  return library.tracks.filter(t => !registeredReferences.has(t.id) && !(continuingTrack?.id === t.id && !openedFiles.has(t.id)) && (ids.has(t.id) || t.provider === 'local' || openedFiles.has(t.id)));
 }
 async function loadCollection() {
   if (collectionLoadEpoch === epoch) return;
@@ -219,6 +269,12 @@ async function refresh(render = true) {
   const expected = epoch;
   const next = await api('/library');
   if (expected !== epoch || !user) return;
+  for (const t of next.tracks) {
+    const local = t.provider === 'local' && openedFiles.get(t.providerId);
+    if (local) { t.localReference = local.localReference; t.canPlay = true; }
+  }
+  fileFavorites.clear();
+  for (const t of next.tracks) if (openedFiles.has(t.providerId) && next.favorites.includes(t.id)) fileFavorites.add(t.providerId);
   next.tracks.push(...[...openedFiles.values()].filter(t => !next.tracks.some(x => x.id === t.id)));
   if (continuingTrack && !next.tracks.some(t => t.id === continuingTrack.id)) next.tracks.push(continuingTrack);
   next.favorites = [...new Set([...next.favorites, ...fileFavorites])];
@@ -230,12 +286,14 @@ async function refresh(render = true) {
   if (render) { renderNav(); renderContent(); renderPlayer(); renderQueue(); }
 }
 function stopPlayback() {
+  savePlayback(); pendingSeek = null; failedTracks.clear();
   playbackGeneration++; playbackFailure = null;
   audio.pause(); audio.removeAttribute('src'); audio.load(); currentId = ''; queue = [];
   lyricId = ''; lyricLines = []; lyricMessage = '选择一首歌，开始聆听'; lyricIndex = -1;
   window.harmonyDesktop?.updateLyrics({ title: '和音', line: lyricMessage, next: '' });
 }
 function showAuth(message = '') {
+  savePlayback(); selectedTracks.clear(); favoritesSnapshot = null;
   collectionLoading = false; collectionErrors = []; collectionLoadEpoch = -1;
   playlistQuery = ''; playlistSearchCollapsed.clear(); trackListQuery = ''; trackListPlatform = 'all';
   libraryTab = 'own'; playbackMode = 0;
@@ -259,6 +317,10 @@ async function enter(account) {
   $('password').value = ''; $('confirm-password').value = ''; $('content').innerHTML = '<div class="loading-note">正在读取你的音乐资料库…</div>';
   try { addLocalRecords(await localReferences()); } catch (error) { toast('本地音乐记录读取失败：' + error.message); }
   await refresh();
+  if (!currentId) await restorePlayback();
+  if (window.harmonyDesktop?.getPreferences) {
+    try { const preferences = await window.harmonyDesktop.getPreferences(); closeAction = preferences.closeAction; shortcuts = { ...defaultShortcuts, ...preferences.shortcuts }; } catch {}
+  }
 }
 function setAuthMode(mode) {
   authMode = mode; const registering = mode === 'register';
@@ -304,7 +366,7 @@ function renderNav() {
   const searchFocused = document.activeElement?.id === 'playlist-search';
   const selection = searchFocused ? [$('playlist-search').selectionStart, $('playlist-search').selectionEnd] : null;
   const item = (id, label, name, count = '') => `<button class="nav-item ${page === id ? 'active' : ''}" data-action="navigate" data-id="${id}" ${page === id ? 'aria-current="page"' : ''}>${icon(name)}<span>${label}</span>${count !== '' ? `<span class="count">${count}</span>` : ''}</button>`;
-  $('navigation').innerHTML = item('home', '现在聆听', 'home') + item('search', '搜索', 'search') + '<div class="nav-label">我的资料库</div>' + item('tracks', '全部音乐', 'music', collectionTracks().length) + item('favorites', '我喜欢的', 'heart', library.favorites.length) + item('recent', '最近播放', 'clock') + item('local', '本地音乐', 'music', openedFiles.size) + item('downloads', '下载管理', 'download') + `<div class="nav-label"><button class="playlist-heading-toggle" data-action="toggle-all-playlist-groups" aria-label="展开或收起全部歌单分组" aria-expanded="${['own', 'qq', 'netease'].some(source => !(playlistQuery.trim() ? playlistSearchCollapsed.has(source) : (layout().collapsed || []).includes(source)))}">我的歌单 ${icon('down')}</button>${ib('plus', '新建歌单', 'new-list')}</div>` + renderSidebarPlaylists() + item('library', '查看全部歌单', 'playlist');
+  $('navigation').innerHTML = '<div class="nav-label">我的资料库</div>' + item('tracks', '全部音乐', 'music', collectionTracks().length) + item('favorites', '我喜欢的', 'heart', library.favorites.filter(id => !openedFiles.has(id)).length) + item('recent', '最近播放', 'clock') + item('local', '本地音乐', 'music', openedFiles.size) + item('downloads', '下载管理', 'download') + `<div class="nav-label"><button class="playlist-heading-toggle" data-action="toggle-all-playlist-groups" aria-label="展开或收起全部歌单分组" aria-expanded="${['own', 'qq', 'netease'].some(source => !(playlistQuery.trim() ? playlistSearchCollapsed.has(source) : (layout().collapsed || []).includes(source)))}">我的歌单 ${icon('down')}</button>${ib('plus', '新建歌单', 'new-list')}</div>` + renderSidebarPlaylists() + item('library', '查看全部歌单', 'playlist');
   $('account-button').classList.toggle('active', page === 'settings');
   if (page === 'settings') $('account-button').setAttribute('aria-current', 'page');
   else $('account-button').removeAttribute('aria-current');
@@ -341,7 +403,7 @@ const playlistTransferButtons = () => `<div class="button-row playlist-tools">${
 function visibleTracks() {
   if (page === 'local') return [...openedFiles.values()];
   if (page === 'playlist') return (list(playlistId)?.trackIds || []).map(track).filter(Boolean);
-  if (page === 'favorites') return library.favorites.map(track).filter(Boolean);
+  if (page === 'favorites') return (favoritesSnapshot ??= [...library.favorites.filter(id => !openedFiles.has(id))]).map(track).filter(Boolean);
   if (page === 'recent') return library.recent.map(track).filter(Boolean);
   if (page === 'search') {
     return [...new Set(remoteResults)].map(track).filter(t => t && ['qq', 'netease'].includes(t.provider) && (filter === 'all' || t.provider === filter));
@@ -386,7 +448,60 @@ function displayStatisticCount(value) {
   if (value >= 10000) return (value / 10000).toFixed(1).replace(/\.0$/, '') + ' 万';
   return value.toLocaleString('zh-CN');
 }
+function canDeleteSelection() {
+  return page !== 'search' && !(page === 'playlist' && list(playlistId)?.source !== 'own');
+}
+function selectionToolbar() {
+  return `<div class="selection-toolbar" role="region" aria-label="批量操作" ${selectedTracks.size ? '' : 'hidden'}><strong>已选 <span data-selection-count>${selectedTracks.size}</span> 首</strong><button class="btn" data-action="select-page">本页全选</button><button class="btn" data-action="bulk-favorite">${icon('heart')}收藏</button><button class="btn" data-action="bulk-add">${icon('plus')}加入歌单</button><button class="btn danger" data-action="bulk-delete" ${canDeleteSelection() ? '' : 'disabled title="平台原始歌单与搜索结果只读"'}>删除</button><button class="text-button" data-action="clear-selection">取消选择</button><span class="selection-feedback" role="status"></span></div>`;
+}
+function updateSelection() {
+  document.querySelectorAll('tr[data-track]').forEach(row => {
+    const selected = selectedTracks.has(row.dataset.track);
+    row.classList.toggle('selected-row', selected);
+    row.setAttribute('aria-selected', selected);
+    row.querySelector('[data-select-track]').checked = selected;
+  });
+  const all = document.querySelector('[data-select-page]');
+  if (all) { all.checked = displayedTracks.length > 0 && displayedTracks.every(id => selectedTracks.has(id)); all.indeterminate = selectedTracks.size > 0 && !all.checked; }
+  const toolbar = document.querySelector('.selection-toolbar');
+  if (toolbar) { toolbar.hidden = !selectedTracks.size; toolbar.querySelector('[data-selection-count]').textContent = selectedTracks.size; }
+}
+function selectTrack(id, checked, range = false) {
+  const start = displayedTracks.indexOf(selectionAnchor), end = displayedTracks.indexOf(id);
+  const ids = range && start >= 0 && end >= 0 ? displayedTracks.slice(Math.min(start, end), Math.max(start, end) + 1) : [id];
+  for (const value of ids) { if (checked) selectedTracks.add(value); else selectedTracks.delete(value); }
+  selectionAnchor = id; updateSelection();
+}
+async function bulkDelete(ids) {
+  if (page === 'playlist') {
+    const p = list(playlistId);
+    if (p?.source !== 'own') return;
+    await replaceTracks(p, p.trackIds.filter(id => !ids.includes(id)));
+    ids.forEach(id => selectedTracks.delete(id));
+    return;
+  }
+  for (const id of ids) {
+    if (page === 'favorites') await toggleFavorite(id, false);
+    else if (openedFiles.has(id)) {
+      if (desktop()) await desktop().removeLocalFiles([id]);
+      else {
+        const database = await db();
+        await new Promise((resolve, reject) => {
+          const tx = database.transaction('files', 'readwrite'); tx.objectStore('files').delete(id);
+          tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error);
+        });
+      }
+      URL.revokeObjectURL(openedFiles.get(id)?.blobUrl);
+      openedFiles.delete(id); fileFavorites.delete(id);
+      library.tracks = library.tracks.filter(t => t.id !== id);
+      if (id === currentId) stopPlayback();
+    } else await api(`/tracks/${id}`, 'DELETE', {});
+    selectedTracks.delete(id);
+  }
+}
 function songTable(items) {
+  displayedTracks = items.map(t => t.id);
+  for (const id of selectedTracks) if (!displayedTracks.includes(id)) selectedTracks.delete(id);
   if (!items.length) {
     if (page === 'search' && !query) return `<div class="empty search-empty"><form id="empty-search-form" class="search-box empty-search-form" role="search">${icon('search')}<input id="empty-search" type="search" maxlength="100" placeholder="搜索歌曲、艺人、专辑" aria-label="搜索网络音乐" value="${esc($('search').value)}"><button type="submit" class="search-submit">搜索</button></form><h3>搜索网络音乐</h3><p>输入歌曲、艺人或专辑，搜索 QQ 音乐与网易云音乐。请先连接音乐平台账号。</p></div>`;
     if (page === 'search' && query) return empty('search', searchBusy ? '正在搜索音乐平台…' : '没有找到相关音乐', '试试更换歌名、歌手或专辑关键词。');
@@ -395,9 +510,11 @@ function songTable(items) {
     if (page === 'playlist') return list(playlistId)?.source === 'own' ? empty('playlist', '给这张歌单，第一首音乐', '从资料库选择歌曲加入，歌单会保存到你的账号。', '从资料库添加', 'add-from-library') : empty('cloud', '这张平台歌单暂无歌曲', '可刷新歌曲列表；原平台歌单保持只读。', '刷新歌曲', 'refresh-platform-list');
     return empty('music', '这里还很安静', '打开电脑里的音频文件即可播放，无需上传。支持 MP3、WAV、FLAC、OGG、M4A、AAC。', '导入本地音乐', 'import');
   }
-  return `<div class="song-table-scroll" role="region" aria-label="歌曲列表" tabindex="0"><table class="song-table ${page === 'search' ? 'search-song-table' : ''}"><thead><tr><th class="number">#</th><th>歌曲 / 艺人</th><th class="album-column">专辑名</th><th class="release-column">发表时间</th>${page === 'search' ? '<th class="plays-column" title="平台提供的歌曲播放量，未提供时显示 —">平台播放量</th><th class="favorites-column" title="平台提供的歌曲收藏量，未提供时显示 —">平台收藏量</th>' : ''}<th class="source">来源</th><th class="actions">操作</th></tr></thead><tbody>${items.map((t, i) => `<tr data-track="${t.id}" tabindex="0" aria-label="播放 ${esc(t.title)}" class="${currentId === t.id && !audio.paused ? 'playing-row' : ''}"><td class="number">${String(i + 1).padStart(2, '0')}</td><td><div class="song-cell">${trackCover(t)}<div><button class="song-name" data-action="play" data-id="${t.id}" title="播放 ${esc(t.title)}">${esc(t.title)}</button><small>${esc(t.artist || '未知艺人')}</small></div></div></td><td class="album-column" title="${esc(t.album || '未提供专辑名')}">${esc(t.album || '—')}</td><td class="release-column">${esc(t.releaseDate || '—')}</td>${page === 'search' ? `<td class="plays-column" title="${Number.isSafeInteger(t.playCount) && t.playCount >= 0 ? esc(t.playCount.toLocaleString('zh-CN')) + ' 次' : '平台未提供歌曲播放量'}">${displayStatisticCount(t.playCount)}</td><td class="favorites-column" title="${Number.isSafeInteger(t.favoriteCount) && t.favoriteCount >= 0 ? esc(t.favoriteCount.toLocaleString('zh-CN')) + ' 次收藏' : '平台未提供歌曲收藏量'}">${displayStatisticCount(t.favoriteCount)}</td>` : ''}<td class="source">${platformLogo(t.provider)}</td><td class="actions">${favoriteButton(t)}${ib('plus', '加入歌单', 'add-to-list', t.id)}${ib('download', t.canDownload ? '下载音乐文件' : t.downloadReason, 'download', t.id, t.canDownload ? '' : 'disabled')}${ib('more', '歌曲更多操作', 'track-more', t.id)}</td></tr>`).join('')}</tbody></table></div>`;
+  return `${selectionToolbar()}<div class="song-table-scroll" role="region" aria-label="歌曲列表" tabindex="0"><table class="song-table ${page === 'search' ? 'search-song-table' : ''}"><thead><tr><th class="number"><input type="checkbox" data-select-page aria-label="本页全选" ${items.every(t => selectedTracks.has(t.id)) ? 'checked' : ''}></th><th>歌曲 / 艺人</th><th class="album-column">专辑名</th><th class="release-column">发表时间</th>${page === 'search' ? '<th class="plays-column" title="平台提供的歌曲播放量，未提供时显示 —">平台播放量</th><th class="favorites-column" title="平台提供的歌曲收藏量，未提供时显示 —">平台收藏量</th>' : ''}<th class="source">来源</th><th class="actions">操作</th></tr></thead><tbody>${items.map((t, i) => `<tr data-track="${t.id}" tabindex="0" aria-label="播放 ${esc(t.title)}" class="${currentId === t.id ? 'playing-row' : ''} ${selectedTracks.has(t.id) ? 'selected-row' : ''} ${audio.paused ? 'is-paused' : ''}" aria-selected="${selectedTracks.has(t.id)}"><td class="number"><span class="row-number">${String(i + 1).padStart(2, '0')}</span><input type="checkbox" data-select-track="${esc(t.id)}" aria-label="选择 ${esc(t.title)}" ${selectedTracks.has(t.id) ? 'checked' : ''}></td><td><div class="song-cell">${trackCover(t)}<div><button class="song-name" data-action="play" data-id="${t.id}" title="播放 ${esc(t.title)}"><span class="song-title">${esc(t.title)}</span><span class="playing-equalizer" aria-label="正在播放"><i></i><i></i><i></i></span></button><small>${esc(t.artist || '未知艺人')}</small></div></div></td><td class="album-column" title="${esc(t.album || '未提供专辑名')}">${esc(t.album || '—')}</td><td class="release-column">${esc(t.releaseDate || '—')}</td>${page === 'search' ? `<td class="plays-column" title="${Number.isSafeInteger(t.playCount) && t.playCount >= 0 ? esc(t.playCount.toLocaleString('zh-CN')) + ' 次' : '平台未提供歌曲播放量'}">${displayStatisticCount(t.playCount)}</td><td class="favorites-column" title="${Number.isSafeInteger(t.favoriteCount) && t.favoriteCount >= 0 ? esc(t.favoriteCount.toLocaleString('zh-CN')) + ' 次收藏' : '平台未提供歌曲收藏量'}">${displayStatisticCount(t.favoriteCount)}</td>` : ''}<td class="source">${platformLogo(t.provider)}</td><td class="actions">${favoriteButton(t)}${ib('plus', '加入歌单', 'add-to-list', t.id)}${ib('download', t.canDownload ? '下载音乐文件' : t.downloadReason, 'download', t.id, t.canDownload ? '' : 'disabled')}${ib('more', '歌曲更多操作', 'track-more', t.id)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function renderContent() {
+  displayedTracks = [];
+  document.querySelector('.sidebar .brand')?.setAttribute('aria-current', page === 'home' ? 'page' : 'false');
   if (!user) return;
   const labels = { local: '本地音乐', home: '现在聆听', search: '搜索', tracks: '全部音乐', favorites: '我喜欢的', recent: '最近播放', library: '我的歌单', settings: '账号与音乐平台', downloads: '下载管理', lyrics: '正在播放', playlist: list(playlistId)?.name || '歌单' };
   $('breadcrumb').textContent = labels[page];
@@ -418,7 +535,7 @@ function renderContent() {
     if (!p) { page = 'library'; renderNav(); return renderContent(); }
     html = `<section class="playlist-header">${cover(p)}<div>${p.source === 'own' ? `<div class="eyebrow">${user.local ? 'MY COLLECTION · 保存在本地' : 'MY COLLECTION · 已保存到账号'}</div>` : ''}<h1>${esc(p.name)}</h1><p>${esc(p.description || '把喜欢的声音，收进同一张歌单。')}<br>${p.trackCount ?? p.trackIds.length} 首歌曲</p><div class="button-row"><button class="btn primary" data-action="play-all" ${p.trackIds.length ? '' : 'disabled'}>${icon('play')}播放</button>${p.source === 'own' ? '<button class="btn" data-action="add-from-library">' + icon('plus') + '添加音乐</button>' + ib('edit', '编辑歌单', 'edit-list', p.id) + ib('trash', '删除歌单', 'delete-list', p.id) : '<button class="btn" data-action="refresh-platform-list">刷新歌曲</button>'}</div></div></section>` + unavailableMusicNotice(visibleTracks()) + trackListSearch();
   } else if (['tracks', 'favorites', 'recent'].includes(page)) {
-    html = heading(labels[page], page === 'tracks' ? `${collectionTracks().length} 首音乐 · 汇总各平台歌单与收藏，本地音乐按原文件位置播放` : page === 'favorites' ? '每一次喜欢，都值得被记住。' : '熟悉的旋律，随时回来。', page === 'tracks' ? '<button class="btn primary" data-action="import">＋ 导入本地音乐</button>' : '') + (page === 'tracks' ? (collectionLoading ? '<div class="notice">正在汇总各平台歌单中的音乐…</div>' : '') + collectionErrors.map(e => `<div class="notice">${esc(provider(e.provider))}：${esc(e.message)} <button class="text-button" data-action="retry-collection">重试</button></div>`).join('') : '') + (page === 'recent' ? songTable(visibleTracks()) : trackListSearch());
+    html = heading(labels[page], page === 'tracks' ? `${collectionTracks().length} 首音乐 · 汇总各平台歌单与收藏，本地音乐按原文件位置播放` : page === 'favorites' ? '每一次喜欢，都值得被记住。' : '熟悉的旋律，随时回来。', page === 'tracks' ? '<button class="btn primary" data-action="import">＋ 导入本地音乐</button>' : page === 'favorites' ? '<button class="btn" data-action="export-favorites">导出喜欢的歌曲</button>' : '') + (page === 'tracks' ? (collectionLoading ? '<div class="notice">正在汇总各平台歌单中的音乐…</div>' : '') + collectionErrors.map(e => `<div class="notice">${esc(provider(e.provider))}：${esc(e.message)} <button class="text-button" data-action="retry-collection">重试</button></div>`).join('') : '') + (page === 'recent' ? songTable(visibleTracks()) : trackListSearch());
   } else if (page === 'search') {
     html = heading(query ? `搜索「${query}」` : '搜索音乐', '无需绑定账号即可搜索 QQ 音乐和网易云音乐。') + platformFilters(filter, 'filter') + (searchBusy ? '<div class="notice">正在搜索音乐平台…</div>' : '') + searchErrors.map(e => `<div class="notice">${esc(provider(e.provider))}：${esc(e.message)}</div>`).join('') + songTable(visibleTracks()) + (query && (remoteResults.length || searchErrors.length) ? `<div class="button-row">${Object.values(searchPages).some(state => state.hasMore) ? `<button class="btn" data-action="search-more" ${searchBusy ? 'disabled' : ''}>${searchBusy ? '正在加载…' : searchErrors.length ? '重试加载更多' : '加载更多'}</button>` : '<span class="muted">已显示平台返回的全部结果</span>'}<span class="muted">已加载 ${visibleTracks().length} 首</span></div>` : '');
   } else if (page === 'settings') {
@@ -439,6 +556,7 @@ function navigate(next, id = '') {
   if (next === 'providers') next = 'settings';
   if (next !== 'search') { clearTimeout(searchTimer); searchGeneration++; searchBusy = false; }
   if (next !== page || id !== playlistId) {
+    selectedTracks.clear(); selectionAnchor = ''; favoritesSnapshot = null;
     trackListQuery = ''; trackListPlatform = 'all';
   }
   page = next; playlistId = id; renderNav(); renderContent(); $('content').scrollTop = 0;
@@ -465,9 +583,12 @@ function renderSettings() {
       <p class="connection-hint">${icon('info')}扫码连接后可同步个人歌单，并按平台权限播放音乐。</p>
     </section>
     <section class="settings-preferences" aria-label="偏好与应用信息">
+      <div class="preference-row"><div><h3>关闭主窗口时</h3><p>托盘中可重新打开和音或退出应用。${window.harmonyDesktop ? '' : '网页中可预设，关闭行为在桌面客户端生效。'}</p></div><select id="close-action" aria-label="关闭主窗口时">${[['tray', '最小化到托盘'], ['ask', '每次询问'], ['quit', '退出应用']].map(([id, label]) => `<option value="${id}" ${closeAction === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
       <div class="preference-row"><div><h3>外观</h3><p>选择适合此刻的界面。</p></div><div class="theme-switch" role="group" aria-label="界面外观">${[['light', '浅色'], ['dark', '深色']].map(([id, label]) => `<button type="button" data-action="theme" data-id="${id}" aria-pressed="${theme === id}">${label}</button>`).join('')}</div></div>
       <div class="preference-row about-harmony"><div><h3>关于和音 · One Music</h3><p>Bring your music together.</p></div><span class="version-label">桌面版 0.5.0</span></div>
     </section>
+    <div class="settings-section-title"><div><h2>快捷键</h2><p>点击按键框并按下新组合。快捷键在和音窗口内生效，输入文字时暂停响应。</p></div><button class="text-button" data-action="reset-shortcuts">恢复默认</button></div>
+    <section class="settings-preferences shortcut-settings" aria-label="快捷键设置">${Object.entries({ 'toggle-play': '播放 / 暂停', previous: '上一首', next: '下一首', search: '搜索音乐', 'new-list': '新建歌单' }).map(([id, label]) => `<div class="preference-row"><label for="shortcut-${id}">${label}</label><input class="shortcut-input" id="shortcut-${id}" data-shortcut="${id}" aria-label="${label}快捷键" value="${esc(shortcuts[id])}" readonly></div>`).join('')}</section>
   </div>`;
 }
 function renderProviderCards() {
@@ -675,10 +796,10 @@ function modal(title, html) {
 function newList(existing = null, addTrackId = '') {
   modal(existing ? '编辑歌单' : '新建歌单', `<p class="dialog-description">为喜欢的声音命名，${user.local ? '保存在本地' : '保存到你的账号'}。</p><form id="playlist-form" data-id="${existing?.id || ''}" data-version="${existing?.version || ''}" data-track="${addTrackId}"><label for="list-name">歌单名称</label><input id="list-name" name="name" maxlength="80" required autofocus placeholder="例如：午后，慢一点" value="${esc(existing?.name || '')}"><label for="list-description">歌单介绍</label><textarea id="list-description" maxlength="500" placeholder="记录属于这张歌单的心情">${esc(existing?.description || '')}</textarea><label for="list-color">封面颜色</label><select id="list-color">${[['sage', '鼠尾草绿'], ['orange', '日落橘'], ['blue', '深海蓝'], ['cream', '暖沙色'], ['pink', '灰玫瑰']].map(([key, text]) => `<option value="${key}" ${existing?.color === key ? 'selected' : ''}>${text}</option>`).join('')}</select><div class="form-error" id="dialog-error" role="alert"></div><div class="dialog-footer"><button type="button" class="btn" data-action="close-dialog">取消</button><button type="submit" class="btn primary">${existing ? '保存修改' : '创建歌单'}</button></div></form>`);
 }
-function addToList(id) {
+async function addToList(id) {
   const t = track(id); if (!t) return;
   if (continuingTrack?.id === id && !openedFiles.has(id)) return toast('这首歌来自本地模式，请在账号中搜索后加入歌单');
-  if (openedFiles.has(id)) return toast('本地音乐按原文件位置播放，可在当前会话中标记喜欢');
+  if (openedFiles.has(id)) { [id] = await storedTrackIds([id]); await refresh(false); }
   modal('加入我的歌单', `<p class="dialog-description">${esc(t.title)} · ${esc(provider(t.provider))}</p>${library.playlists.filter(p => p.source === 'own').map(p => `<button class="choice" data-action="choose-list" data-id="${p.id}" data-track="${id}" ${p.trackIds.includes(id) ? 'disabled' : ''}><div class="mini-cover ${p.color}">♫</div><span>${esc(p.name)}<small>${p.trackIds.includes(id) ? '已经在这张歌单中' : p.trackIds.length + ' 首歌曲'}</small></span>${icon('plus')}</button>`).join('')}<button class="choice" data-action="new-list-with-track" data-id="${id}">${icon('plus')}<span>新建歌单并添加</span></button>`);
 }
 function addFromLibrary() {
@@ -690,22 +811,33 @@ async function replaceTracks(p, ids) {
   await api(`/playlists/${p.id}/tracks`, 'PUT', { version: p.version, trackIds: ids });
   await refresh();
 }
+async function skipFailedTrack(id, generation, message) {
+  if (generation !== playbackGeneration || currentId !== id || !user) return;
+  failedTracks.add(id);
+  audio.pause();
+  const index = queue.indexOf(id);
+  const candidates = [...queue.slice(index + 1), ...queue.slice(0, index + 1)];
+  const following = candidates.find(value => !failedTracks.has(value) && track(value));
+  if (!following) {
+    toast(`本轮歌曲均无法播放，已暂停。${message}，可选择歌曲重试。`);
+    savePlayback(); renderPlayer(); return;
+  }
+  toast(`${message}，已跳到下一首`);
+  await Promise.resolve();
+  await play(following, undefined, true);
+}
 async function reportPlaybackError(id, generation) {
   if (!id || currentId !== id || generation !== playbackGeneration) return;
   if (playbackFailure) return playbackFailure;
   playbackFailure = (async () => {
-    let message = track(id)?.provider === 'local' ? '音频无法加载，请检查文件格式或网络连接' : '音频无法加载，请稍后重试或更换歌曲';
+    let message = '当前歌曲无法播放';
     try {
-      // Media elements hide JSON errors. Probe a single byte only after failure
-      // so platform permission/expiry errors remain visible to the listener.
-      if (openedFiles.has(id)) throw new Error('本地音频格式无法解码');
-      const response = await fetch(`/api/tracks/${id}/audio`, { credentials: 'same-origin', headers: { Range: 'bytes=0-0' }, signal: AbortSignal.timeout(20000) });
-      if (!response.ok && response.headers.get('content-type')?.includes('application/json')) {
-        const result = await response.json();
-        message = result.error || message;
-      } else await response.body?.cancel();
-    } catch { message = openedFiles.has(id) ? '无法解码此本地文件，请检查文件或更换音频格式' : '无法连接音频服务，请检查网络后重试'; }
-    if (generation === playbackGeneration && currentId === id && user) { renderPlayer(); toast(message); }
+      if (openedFiles.has(id)) throw new Error('无法解码本地文件');
+      const response = await fetch(`/api/tracks/${id}/audio`, { credentials: 'same-origin', headers: { Range: 'bytes=0-0' }, signal: AbortSignal.timeout(3000) });
+      if (!response.ok && response.headers.get('content-type')?.includes('application/json')) message = (await response.json()).error || message;
+      else await response.body?.cancel();
+    } catch {}
+    await skipFailedTrack(id, generation, message);
   })();
   return playbackFailure;
 }
@@ -716,19 +848,21 @@ function unavailableMusicNotice(tracks) {
   const missing = missingPlatforms(tracks);
   return missing.length ? `<div class="notice playback-connection-notice">${icon('info')}<span>${esc(missing.map(provider).join('、'))}尚未连接或授权已失效，对应歌曲暂不可播放。可连接任意可用账号。</span><button class="text-button" data-action="import-connection-settings">连接音乐平台</button></div>` : '';
 }
-async function play(id, ids) {
+async function play(id, ids, recovering = false) {
   const t = track(id);
-  if (!t?.canPlay) {
-    if (t && missingPlatforms([t]).length) {
-      modal('连接平台后播放', `${unavailableMusicNotice([t])}<div class="dialog-footer"><button class="btn" data-action="close-dialog">稍后再说</button><button class="btn primary" data-action="connect-import-platform" data-id="${t.provider}">连接${esc(provider(t.provider))}</button></div>`);
-      return;
-    }
-    return toast(t?.provider === 'local' ? '歌单文件不含本地音频，请在有原音乐文件的资料库中播放' : '当前歌曲暂无可用音频');
-  }
+  if (!t) return;
+  if (!recovering) failedTracks.clear();
   const generation = ++playbackGeneration; playbackFailure = null;
-  if (ids) queue = [...ids];
+  if (ids) queue = [...new Set(ids)];
   if (!queue.includes(id)) queue.push(id);
-  if (currentId !== id || audio.error) {
+  const changed = currentId !== id;
+  if (changed) { audio.pause(); pendingSeek = null; }
+  const previous = track(currentId);
+  currentId = id;
+  if (!t.canPlay) {
+    await skipFailedTrack(id, generation, '当前歌曲暂无可用音频'); return;
+  }
+  if (changed || audio.error || !audio.getAttribute('src')) {
     let source = `/api/tracks/${id}/audio`;
     if (t.localReference) {
       try {
@@ -736,25 +870,27 @@ async function play(id, ids) {
         if (generation !== playbackGeneration) return;
         if (t.blobUrl) URL.revokeObjectURL(t.blobUrl);
         source = t.blobUrl = URL.createObjectURL(file);
-      } catch (error) { toast(error.message); return; }
+      } catch (error) { await skipFailedTrack(id, generation, error.message); return; }
     }
-    const previous = track(currentId);
     if (previous?.blobUrl && previous.id !== id) { URL.revokeObjectURL(previous.blobUrl); delete previous.blobUrl; }
-    currentId = id; audio.src = source;
+    audio.src = source;
   }
   if (lyricId !== id) void loadLyrics(id);
+  applyPendingSeek();
   try { await audio.play(); } catch (error) {
-    if (error.name !== 'AbortError') await reportPlaybackError(id, generation);
+    if (generation !== playbackGeneration) return;
+    if (error.name === 'NotAllowedError') { audio.pause(); toast('点击播放按钮继续聆听'); }
+    else if (error.name !== 'AbortError') await reportPlaybackError(id, generation);
     return;
   }
   if (generation !== playbackGeneration || currentId !== id) return;
-  renderPlayer(); renderContent(); renderQueue();
+  renderPlayer(); renderContent(); renderQueue(); savePlayback();
   try { if (!openedFiles.has(id) && continuingTrack?.id !== id) await api(`/tracks/${id}/recent`, 'POST', {}); if (user) library.recent = [id, ...library.recent.filter(x => x !== id)].slice(0, 50); }
   catch (error) { toast(error.message); }
 }
 function next(direction = 1, automatic = false) {
   if (!queue.length) return;
-  if (automatic && playbackMode === 2) { audio.currentTime = 0; audio.play().catch(() => toast('无法继续播放')); return; }
+  if (automatic && playbackMode === 2) { audio.currentTime = 0; audio.play().catch(() => reportPlaybackError(currentId, playbackGeneration)); return; }
   const index = queue.indexOf(currentId);
   let destination = index + direction;
   if (playbackMode === 1 && queue.length > 1) {
@@ -777,14 +913,16 @@ function renderPlayer() {
   $('desktop-lyrics').setAttribute('aria-pressed', desktopLyrics);
   if (page === 'lyrics') renderLyricsPage();
   if (page === 'home') renderHomeLyrics();
-  document.querySelectorAll('.playing-row').forEach(row => row.classList.remove('playing-row'));
-  if (t && !audio.paused) document.querySelector(`[data-track="${t.id}"]`)?.classList.add('playing-row');
+  document.querySelectorAll('tr[data-track]').forEach(row => {
+    row.classList.toggle('playing-row', row.dataset.track === currentId);
+    row.classList.toggle('is-paused', audio.paused);
+  });
   updateProgress();
 }
 function updateProgress() {
-  $('elapsed').textContent = time(audio.currentTime); $('duration').textContent = time(audio.duration);
+  $('elapsed').textContent = time(pendingSeek ?? audio.currentTime); $('duration').textContent = time(audio.duration);
   updateLyrics();
-  $('seek').max = Number.isFinite(audio.duration) ? audio.duration : 100; $('seek').value = audio.currentTime || 0;
+  $('seek').max = Number.isFinite(audio.duration) ? audio.duration : 100; $('seek').value = pendingSeek ?? (audio.currentTime || 0);
 }
 function renderQueue() {
   if ($('queue-panel').hidden) return;
@@ -794,6 +932,41 @@ function renderQueue() {
 async function handleAction(button) {
   const action = button.dataset.action, id = button.dataset.id;
   switch (action) {
+    case 'reset-shortcuts': if (window.harmonyDesktop?.setPreferences) await window.harmonyDesktop.setPreferences({ shortcuts: defaultShortcuts }); shortcuts = { ...defaultShortcuts }; try { localStorage.setItem('harmony-shortcuts', JSON.stringify(shortcuts)); } catch {} renderContent(); toast('已恢复默认快捷键'); return;
+    case 'clear-selection': selectedTracks.clear(); updateSelection(); return;
+    case 'select-page': displayedTracks.forEach(id => selectedTracks.add(id)); updateSelection(); return;
+    case 'bulk-add': {
+      const ids = [...selectedTracks];
+      const eligible = ids.filter(id => continuingTrack?.id !== id);
+      modal('批量加入歌单', `<p class="dialog-description">已选 ${ids.length} 首，可添加 ${eligible.length} 首。${eligible.length < ids.length ? '正在续播的其他账号歌曲需重新搜索后添加。' : ''}</p>${library.playlists.filter(p => p.source === 'own').map(p => `<button class="choice" data-action="bulk-choose-list" data-id="${esc(p.id)}" data-tracks="${esc(JSON.stringify(eligible))}" ${eligible.length ? '' : 'disabled'}>${icon('playlist')}<span>${esc(p.name)}</span>${icon('plus')}</button>`).join('') || '<p class="dialog-description">请先新建歌单。</p>'}`);
+      return;
+    }
+    case 'bulk-choose-list': {
+      const p = list(id); if (!p || p.source !== 'own') return;
+      await replaceTracks(p, [...new Set([...p.trackIds, ...await storedTrackIds(JSON.parse(button.dataset.tracks))])]);
+      $('dialog').close(); selectedTracks.clear(); updateSelection(); toast('所选歌曲已加入歌单'); return;
+    }
+    case 'bulk-delete': {
+      if (!canDeleteSelection()) return;
+      const detail = page === 'favorites' ? '取消所选歌曲的收藏，刷新列表后隐藏。' : page === 'playlist' ? '从当前自建歌单移除所选歌曲。' : page === 'local' ? '移除所选本地音乐索引，原音乐文件保留。' : '从和音资料库删除所选歌曲，同时移除歌单、收藏和最近播放中的关联。本地引用只移除索引，账号内上传的音频也会删除。';
+      modal('删除所选歌曲？', `<p class="dialog-description">共 ${selectedTracks.size} 首。${detail}</p><div class="dialog-footer"><button class="btn" data-action="close-dialog">取消</button><button class="btn danger" data-action="confirm-bulk-delete">确认删除</button></div>`); return;
+    }
+    case 'confirm-bulk-delete': case 'bulk-favorite': {
+      const ids = [...selectedTracks];
+      if (!ids.length || selectionBusy) return;
+      selectionBusy = true;
+      try {
+        if (action === 'bulk-favorite') {
+          for (const id of ids) { await toggleFavorite(id, true); selectedTracks.delete(id); }
+        } else await bulkDelete(ids);
+        $('dialog').close(); toast('批量操作完成');
+      } catch (error) { toast(`操作中断，未完成 ${selectedTracks.size} 首：${error.message}`); }
+      finally {
+        selectionBusy = false;
+        await refresh(false); renderNav(); renderContent(); renderPlayer(); updateSelection();
+      }
+      return;
+    }
     case 'toggle-playlist-group': case 'toggle-all-playlist-groups': {
       const sources = ['own', 'qq', 'netease'];
       if (action === 'toggle-playlist-group' && !sources.includes(id)) return;
@@ -818,8 +991,9 @@ async function handleAction(button) {
     case 'desktop-lyrics': desktopLyrics = await window.harmonyDesktop.setLyricsVisible(!desktopLyrics); renderPlayer(); updateLyrics(true); return;
     case 'seek-lyric': audio.currentTime = Number(button.dataset.time); updateLyrics(true); return;
     case 'retry-lyrics': if (currentId) await loadLyrics(currentId); return;
-    case 'export-playlists': {
-      const filename = `和音歌单-${new Date().toLocaleDateString('sv-SE')}.hy`;
+    case 'export-favorites': case 'export-playlists': {
+      const favoritesOnly = action === 'export-favorites';
+      const filename = `${favoritesOnly ? '和音喜欢的歌曲' : '和音歌单'}-${new Date().toLocaleDateString('sv-SE')}.hy`;
       try {
         // Open the browser picker before any network await consumes user activation.
         let handle;
@@ -828,20 +1002,21 @@ async function handleAction(button) {
           handle = await window.showSaveFilePicker({ suggestedName: filename, types: [{ description: '和音歌单', accept: { 'application/json': ['.hy'] } }], excludeAcceptAllOption: true });
         }
         const data = await api('/playlists/export');
+        if (favoritesOnly) data.playlists = [];
         const content = JSON.stringify(data, null, 2);
         if (handle) {
           const writable = await handle.createWritable();
           try { await writable.write(content); await writable.close(); }
           catch (error) { await writable.abort().catch(() => {}); throw error; }
         } else if (!await window.harmonyDesktop.savePlaylistFile({ filename, content })) return;
-        toast(`已导出喜欢列表和 ${data.playlists.length} 张自建歌单`);
+        toast(favoritesOnly ? `已导出 ${data.favorites.length} 首喜欢的歌曲` : `已导出喜欢列表和 ${data.playlists.length} 张自建歌单`);
       } catch (error) { if (error.name !== 'AbortError') toast('导出未完成：' + error.message); }
       return;
     }
     case 'import-playlists': if (!importingPlaylists) $('playlist-file-input').click(); return;
     case 'connect-import-platform': navigate('settings'); await startProviderQr(id); return;
     case 'import-connection-settings': $('dialog').close(); navigate('settings'); return;
-    case 'tracks': case 'library': case 'settings': case 'lyrics': case 'downloads': navigate(action); return;
+    case 'home': case 'tracks': case 'library': case 'settings': case 'lyrics': case 'downloads': navigate(action); return;
     case 'open-list': {
       const p = list(id); if (!p) return;
       navigate('playlist', id);
@@ -858,7 +1033,7 @@ async function handleAction(button) {
     case 'edit-list': newList(list(id)); return;
     case 'new-list-with-track': newList(null, id); return;
     case 'close-dialog': $('dialog').close(); return;
-    case 'add-to-list': addToList(id); return;
+    case 'add-to-list': await addToList(id); return;
     case 'add-from-library': addFromLibrary(); return;
     case 'choose-list': {
       const p = list(id), trackId = button.dataset.track;
@@ -870,7 +1045,7 @@ async function handleAction(button) {
       modal('删除这张歌单？', `<p class="dialog-description">「${esc(p.name)}」将从当前账号删除。音乐文件和其他歌单不受影响。</p><div class="dialog-footer"><button class="btn" data-action="close-dialog">取消</button><button class="btn danger" data-action="confirm-delete-list" data-id="${id}" data-version="${p.version}">删除歌单</button></div>`); return;
     }
     case 'confirm-delete-list': await api(`/playlists/${id}`, 'DELETE', { version: Number(button.dataset.version) }); $('dialog').close(); await refresh(false); navigate('library'); toast('歌单已从账号删除'); return;
-    case 'play': await play(id, visibleTracks().map(t => t.id)); return;
+    case 'play': await play(id, displayedTracks); return;
     case 'play-queued': await play(id); return;
     case 'play-all': {
       const items = page === 'home' ? collectionTracks() : visibleTracks(); if (items.length) await play(items[0].id, items.map(t => t.id)); return;
@@ -878,7 +1053,7 @@ async function handleAction(button) {
     case 'toggle-play': if (!audio.paused) audio.pause(); else if (currentId) await play(currentId); else if (collectionTracks().length) await play(collectionTracks()[0].id, collectionTracks().map(t => t.id)); else toast('导入本地音乐或连接音乐平台，再开始聆听'); return;
     case 'next': next(); return;
     case 'previous': if (audio.currentTime > 3) audio.currentTime = 0; else next(-1); return;
-    case 'playback-mode': playbackMode = (playbackMode + 1) % 3; renderPlayer(); return;
+    case 'playback-mode': playbackMode = (playbackMode + 1) % 3; savePlayback(); renderPlayer(); return;
     case 'queue': $('queue-panel').hidden = !$('queue-panel').hidden; renderQueue(); renderPlayer(); return;
     case 'favorite': await toggleFavorite(id); return;
     case 'download': {
@@ -926,7 +1101,7 @@ async function handleAction(button) {
     case 'import': $('dialog').close(); navigate('local'); return;
     case 'import-files': await importLocal('files'); return;
     case 'import-folder': await importLocal('folder'); return;
-    case 'refresh': await refresh(); toast('资料库已同步'); return;
+    case 'refresh': favoritesSnapshot = null; await refresh(); toast('资料库已同步'); return;
     case 'theme': theme = id; document.documentElement.dataset.theme = id; try { localStorage.setItem('harmony-theme', id); } catch {} renderContent(); return;
     case 'logout': modal('退出当前账号？', '<p class="dialog-description">歌单和音乐已保存在账号中。重新登录即可继续使用。</p><div class="dialog-footer"><button class="btn" data-action="close-dialog">取消</button><button class="btn primary" data-action="confirm-logout">退出登录</button></div>'); return;
     case 'confirm-logout': await api('/auth/logout', 'POST', {}); showAuth(); toast('已退出登录'); return;
@@ -934,11 +1109,24 @@ async function handleAction(button) {
   }
 }
 document.addEventListener('click', async event => {
+  const checkbox = event.target.closest('[data-select-track],[data-select-page]');
+  if (checkbox) {
+    if (selectionBusy) { event.preventDefault(); return; }
+    if (checkbox.hasAttribute('data-select-page')) {
+      displayedTracks.forEach(id => checkbox.checked ? selectedTracks.add(id) : selectedTracks.delete(id)); updateSelection();
+    } else selectTrack(checkbox.dataset.selectTrack, checkbox.checked, event.shiftKey);
+    return;
+  }
   const authButton = event.target.closest('[data-auth]'); if (authButton) return setAuthMode(authButton.dataset.auth);
   const button = event.target.closest('[data-action]');
+  if (button?.tagName === 'A') event.preventDefault();
+  if (selectionBusy && (button || event.target.closest('tr[data-track]'))) return;
   if (!button) {
     const row = event.target.closest('tr[data-track]');
-    if (row && !event.target.closest('button,a,input,select,textarea') && user) await play(row.dataset.track, visibleTracks().map(t => t.id));
+    if (row && !event.target.closest('button,a,input,select,textarea') && user) {
+      if (event.shiftKey || selectedTracks.size) selectTrack(row.dataset.track, !selectedTracks.has(row.dataset.track), event.shiftKey);
+      else await play(row.dataset.track, displayedTracks);
+    }
     return;
   }
   if (button.disabled) return;
@@ -1085,13 +1273,48 @@ $('search').addEventListener('compositionend', () => { composing = false; clearT
 $('dialog').addEventListener('close', () => { if (!$('dialog').open) stopQr(); });
 $('seek').oninput = () => { if (Number.isFinite(audio.duration)) audio.currentTime = Number($('seek').value); };
 $('volume').oninput = () => { audio.volume = Number($('volume').value); };
-audio.addEventListener('timeupdate', updateProgress);
-audio.addEventListener('loadedmetadata', updateProgress);
+audio.addEventListener('timeupdate', () => {
+  updateProgress();
+  if (!audio.paused && audio.currentTime > 1) failedTracks.clear();
+  if (Date.now() - lastPlaybackSave > 1000) { savePlayback(); lastPlaybackSave = Date.now(); }
+});
+audio.addEventListener('loadedmetadata', () => { applyPendingSeek(); updateProgress(); });
+audio.addEventListener('seeked', savePlayback);
+audio.addEventListener('volumechange', savePlayback);
+window.addEventListener('pagehide', savePlayback);
+window.addEventListener('beforeunload', savePlayback);
 audio.addEventListener('play', renderPlayer);
-audio.addEventListener('pause', renderPlayer);
+audio.addEventListener('pause', () => { renderPlayer(); savePlayback(); });
 audio.addEventListener('ended', () => next(1, true));
-audio.addEventListener('error', () => { if (currentId) void reportPlaybackError(currentId, playbackGeneration); });
-document.addEventListener('keydown', event => {
+audio.addEventListener('error', () => { if (currentId && audio.error) void reportPlaybackError(currentId, playbackGeneration); });
+document.addEventListener('change', async event => {
+  if (event.target.id !== 'close-action') return;
+  const previous = closeAction;
+  try {
+    const value = event.target.value;
+    if (window.harmonyDesktop?.setPreferences) await window.harmonyDesktop.setPreferences({ closeAction: value });
+    localStorage.setItem('harmony-close-action', value); closeAction = value; toast('关闭行为已保存');
+  } catch (error) { event.target.value = previous; toast(error.message); }
+});
+document.addEventListener('keydown', async event => {
+  const capture = event.target.closest?.('[data-shortcut]');
+  if (capture) {
+    if (event.key === 'Tab') return;
+    event.preventDefault();
+    if (event.key === 'Escape') { capture.blur(); return; }
+    if (['Control', 'Meta', 'Alt', 'Shift'].includes(event.key)) return;
+    const value = shortcutValue(event);
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && !['Space', 'MediaPlayPause', 'MediaTrackNext', 'MediaTrackPrevious'].includes(event.code)) { toast('请使用 Ctrl、Alt 组合键，或空格 / 媒体键'); return; }
+    if (['Ctrl+A', 'Ctrl+C', 'Ctrl+V', 'Ctrl+X', 'Ctrl+R', 'Ctrl+W', 'Ctrl+Q', 'Alt+F4'].includes(value)) { toast('请避开常用编辑与系统快捷键'); return; }
+    if (Object.entries(shortcuts).some(([id, key]) => id !== capture.dataset.shortcut && key === value)) { toast('这个快捷键已用于其他操作'); return; }
+    const nextShortcuts = { ...shortcuts, [capture.dataset.shortcut]: value };
+    try {
+      if (window.harmonyDesktop?.setPreferences) await window.harmonyDesktop.setPreferences({ shortcuts: nextShortcuts });
+      localStorage.setItem('harmony-shortcuts', JSON.stringify(nextShortcuts)); shortcuts = nextShortcuts;
+    } catch (error) { toast(error.message); return; }
+    capture.value = value; toast('快捷键已保存'); return;
+  }
+
   const libraryTabButton = event.target.closest?.('[role="tab"][data-action="library-tab"]');
   if (libraryTabButton && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
     event.preventDefault(); const tabs = [...document.querySelectorAll('.library-tabs [role="tab"]')], index = tabs.indexOf(libraryTabButton);
@@ -1102,12 +1325,23 @@ document.addEventListener('keydown', event => {
   if (row && event.target === row && ['Enter', ' '].includes(event.key)) { event.preventDefault(); void play(row.dataset.track, visibleTracks().map(t => t.id)); return; }
   if (event.key === 'Escape' && event.target.id === 'playlist-search') { event.preventDefault(); playlistQuery = ''; playlistSearchCollapsed.clear(); renderNav(); $('playlist-search').focus({ preventScroll: true }); return; }
   if (event.key === 'Escape' && event.target === $('search')) { clearTimeout(searchTimer); $('search').blur(); return; }
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); $('search').focus(); $('search').select(); }
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); newList(); }
-  if (event.code === 'Space' && !/INPUT|TEXTAREA|SELECT|BUTTON/.test(event.target.tagName)) { event.preventDefault(); $('play-toggle').click(); }
+  if (event.key === 'Escape' && selectedTracks.size) { selectedTracks.clear(); updateSelection(); return; }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a' && !event.target.closest('input,textarea,select,[contenteditable="true"]') && displayedTracks.length) {
+    event.preventDefault(); displayedTracks.forEach(id => selectedTracks.add(id)); updateSelection(); return;
+  }
+  if (!event.target.closest('input,textarea,select,[contenteditable="true"]') && !(event.code === 'Space' && event.target.closest('button'))) {
+    const action = Object.keys(shortcuts).find(id => shortcuts[id] === shortcutValue(event));
+    if (action && !event.repeat) {
+      event.preventDefault();
+      if (action === 'search') { $('search').focus(); $('search').select(); }
+      else if (action === 'new-list') newList();
+      else void handleAction({ dataset: { action } }).catch(error => toast(error.message));
+      return;
+    }
+  }
   if (event.key === 'Escape') { $('queue-panel').hidden = true; renderPlayer(); }
 });
-window.addEventListener('focus', () => { if (user && !$('dialog').open) refresh().catch(error => syncStatus(error.message, true)); });
+window.addEventListener('focus', () => { if (user && !$('dialog').open) refresh(false).then(() => { renderNav(); renderContent(); renderPlayer(); renderQueue(); }).catch(error => syncStatus(error.message, true)); });
 for (const name of ['previous', 'next']) $(name).innerHTML = icon(name);
 $('volume-icon').innerHTML = icon('volume'); $('queue-button').innerHTML = icon('queue'); $('search-icon').innerHTML = icon('search'); renderPlayer();
 try { await window.harmonyPreview?.ready; await enter((await api('/me')).user); }

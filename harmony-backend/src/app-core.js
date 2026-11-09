@@ -117,7 +117,7 @@ export function createAppCore(options, createAccountRoutes) {
     const platformConnected = t.provider !== 'local' && (states || providers.states(t.user_id)).some(p => p.id === t.provider && p.connected);
     return { id: t.id, title: t.title, artist: t.artist, album: t.album, duration: t.duration,
       releaseDate: t.release_date || '', playCount: t.play_count ?? null, favoriteCount: t.favorite_count ?? null,
-      provider: t.provider, coverUrl: t.cover_url || '', bytes: t.bytes, canPlay: !!t.file_name || platformConnected, canDownload: !!t.file_name,
+      provider: t.provider, providerId: t.provider_id || t.id, coverUrl: t.cover_url || '', bytes: t.bytes, canPlay: !!t.file_name || platformConnected, canDownload: !!t.file_name,
       fileExtension: t.file_name ? extname(t.file_name) : '',
       downloadReason: t.file_name ? '下载账号内的原始音乐文件' : '当前无平台免费下载授权' };
   }
@@ -287,6 +287,23 @@ export function createAppCore(options, createAccountRoutes) {
           });
           return json(res, 200, { playlist: playlistData(ownPlaylist(id, user.id)) });
         }
+      }
+      if (path === '/api/tracks/references' && method === 'POST') {
+        const input = await body(req);
+        if (!Array.isArray(input.tracks) || input.tracks.length < 1 || input.tracks.length > 500) throw new ApiError(400, '每次可登记 1 至 500 首本地音乐');
+        const records = input.tracks.map(t => {
+          if (!t || typeof t.referenceId !== 'string' || !/^file-[a-zA-Z0-9-]{1,128}$/.test(t.referenceId)) throw new ApiError(400, '本地音乐标识无效');
+          return { referenceId: t.referenceId, title: cleanText(t.title, '歌曲名称', 1000) };
+        });
+        const tracks = transaction(db, () => records.map(t => {
+          let existing = db.prepare("SELECT id FROM tracks WHERE user_id=? AND provider='local' AND provider_id=?").get(user.id, t.referenceId);
+          if (!existing) {
+            existing = { id: randomUUID() };
+            db.prepare("INSERT INTO tracks(id,user_id,provider,provider_id,title,artist,created_at) VALUES(?,?,'local',?,?,'本地文件',?)").run(existing.id, user.id, t.referenceId, t.title, Date.now());
+          }
+          return trackData(ownTrack(existing.id, user.id));
+        }));
+        return json(res, 200, { tracks });
       }
       if (path === '/api/tracks/import' && method === 'POST') {
         const originalName = cleanText(url.searchParams.get('name'), '文件名', 255);

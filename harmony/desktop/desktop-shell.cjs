@@ -1,5 +1,5 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, globalShortcut, screen } = require('electron');
-const { mkdirSync } = require('node:fs');
+const { app, BrowserWindow, Menu, dialog, ipcMain, globalShortcut, screen, Tray } = require('electron');
+const { mkdirSync, readFileSync, writeFileSync, renameSync } = require('node:fs');
 const path = require('node:path');
 
 function createDesktopShell(getOrigin, getBackend) {
@@ -8,9 +8,68 @@ function createDesktopShell(getOrigin, getBackend) {
     app.setPath('userData', process.env.HARMONY_USER_DATA);
   }
   let window, closing = false;
+  let tray, closePrompt = false;
+  const preferencesPath = () => path.join(app.getPath('userData'), 'preferences.json');
+  const playbackPath = () => path.join(app.getPath('userData'), 'playback-state.json');
+  function readJson(file) {
+    try { return JSON.parse(readFileSync(file, 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return {}; throw error; }
+  }
+  function writeJson(file, value) {
+    writeFileSync(file + '.tmp', JSON.stringify(value));
+    renameSync(file + '.tmp', file);
+  }
+  function preferences() {
+    const value = readJson(preferencesPath());
+    return { closeAction: ['tray', 'ask', 'quit'].includes(value.closeAction) ? value.closeAction : 'tray', shortcuts: value.shortcuts || {} };
+  }
+  function showWindow() {
+    if (!window || window.isDestroyed()) return;
+    if (window.isMinimized()) window.restore();
+    window.show(); window.focus();
+  }
+  function hideToTray() {
+    try {
+      if (!tray) {
+        tray = new Tray(path.join(__dirname, 'icon.png'));
+        tray.setToolTip('和音 · One Music');
+        tray.setContextMenu(Menu.buildFromTemplate([
+          { label: '打开和音', click: showWindow },
+          { type: 'separator' },
+          { label: '退出和音', click: () => app.quit() },
+        ]));
+        tray.on('double-click', showWindow);
+        tray.on('click', showWindow);
+      }
+      window.hide();
+    } catch { window.minimize(); }
+  }
   function trusted(event) {
     return window && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && new URL(event.senderFrame.url).origin === getOrigin();
   }
+  ipcMain.handle('preferences:get', event => { if (!trusted(event)) throw new Error('访问被拒绝'); return preferences(); });
+  ipcMain.handle('preferences:set', (event, value) => {
+    if (!trusted(event) || !value || typeof value !== 'object') throw new Error('设置无效');
+    const next = preferences();
+    if (value.closeAction !== undefined) {
+      if (!['tray', 'ask', 'quit'].includes(value.closeAction)) throw new Error('关闭行为无效');
+      next.closeAction = value.closeAction;
+    }
+    if (value.shortcuts !== undefined) {
+      if (!value.shortcuts || typeof value.shortcuts !== 'object' || Object.entries(value.shortcuts).some(([id, key]) => !['toggle-play', 'previous', 'next', 'search', 'new-list'].includes(id) || typeof key !== 'string' || key.length > 100)) throw new Error('快捷键无效');
+      next.shortcuts = value.shortcuts;
+    }
+    writeJson(preferencesPath(), next); return preferences();
+  });
+  ipcMain.handle('playback:get', (event, key) => {
+    if (!trusted(event) || typeof key !== 'string') throw new Error('访问被拒绝');
+    return readJson(playbackPath())[key] || null;
+  });
+  ipcMain.on('playback:save', (event, key, state) => {
+    if (!trusted(event) || typeof key !== 'string' || key.length > 200 || !state || typeof state.id !== 'string' || !Array.isArray(state.queue) || state.queue.length > 100000 || state.queue.some(id => typeof id !== 'string') || !Number.isFinite(state.position)) return;
+    try { const states = readJson(playbackPath()); states[key] = state; writeJson(playbackPath(), states); }
+    catch { if (window && !window.isDestroyed()) window.webContents.send('lyrics:notice', '播放进度暂时无法保存，请检查数据目录权限'); }
+  });
   let lyricsWindow, lyricsPayload = { title: '和音', line: '选择一首歌，开始聆听', next: '' }, lyricsLocked = false;
   function sendVisibility() { if (window && !window.isDestroyed()) window.webContents.send('lyrics:visibility', !!lyricsWindow?.isVisible()); }
   function overlayTrusted(event) { return lyricsWindow && event.sender === lyricsWindow.webContents && event.senderFrame === lyricsWindow.webContents.mainFrame; }
@@ -73,6 +132,20 @@ function createDesktopShell(getOrigin, getBackend) {
     });
     Menu.setApplicationMenu(process.platform === 'darwin' ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }]) : null);
     window.setMenu(null);
+    window.on('close', async event => {
+      if (closing) return;
+      const action = preferences().closeAction;
+      if (action === 'quit') { event.preventDefault(); app.quit(); return; }
+      event.preventDefault();
+      if (closePrompt) return;
+      if (action === 'tray') { hideToTray(); return; }
+      closePrompt = true;
+      try {
+        const result = await dialog.showMessageBox(window, { type: 'question', title: '关闭和音', message: '关闭窗口后如何处理？', buttons: ['最小化到托盘', '退出应用', '取消'], defaultId: 0, cancelId: 2 });
+        if (result.response === 0) hideToTray();
+        if (result.response === 1) app.quit();
+      } finally { closePrompt = false; }
+    });
     window.on('closed', () => { lyricsWindow?.destroy(); if (!closing) app.quit(); });
     window.once('ready-to-show', () => { if (!process.env.HARMONY_TEST_HIDDEN) window.show(); });
     return window;
@@ -80,11 +153,12 @@ function createDesktopShell(getOrigin, getBackend) {
 
   function start(startup) {
     if (!app.requestSingleInstanceLock()) { app.quit(); return; }
-    app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.focus(); } });
+    app.on('second-instance', showWindow);
+    app.on('activate', showWindow);
     app.whenReady().then(startup).catch(error => { dialog.showErrorBox('和音无法启动', error.message); app.quit(); });
   }
   app.on('window-all-closed', () => { if (!closing) app.quit(); });
-  app.on('will-quit', () => globalShortcut.unregisterAll());
+  app.on('will-quit', () => { globalShortcut.unregisterAll(); tray?.destroy(); });
   app.on('before-quit', event => {
     const backend = getBackend();
     if (!backend || closing) return;

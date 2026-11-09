@@ -7,6 +7,18 @@ module.exports = ({ app, ipcMain, dialog, trusted, getWindow }) => {
   const supported = name => /\.(mp3|wav|flac|ogg|m4a|aac)$/i.test(name);
   let pending = Promise.resolve();
   ipcMain.handle('local-files:list', async event => { if (!trusted(event)) throw new Error('访问被拒绝'); await pending; return load(); });
+  ipcMain.handle('local-files:remove', async (event, ids) => {
+    if (!trusted(event) || !Array.isArray(ids) || ids.some(id => typeof id !== 'string')) throw new Error('访问被拒绝');
+    const operation = pending.then(async () => {
+      const records = (await load()).filter(record => !ids.includes(record.id));
+      const temporary = indexPath() + '.tmp';
+      await fs.writeFile(temporary, JSON.stringify(records, null, 2));
+      await fs.rename(temporary, indexPath());
+      return records;
+    });
+    pending = operation.catch(() => {});
+    return operation;
+  });
   ipcMain.handle('local-files:pick', async (event, kind) => {
     if (!trusted(event)) throw new Error('访问被拒绝');
     const result = await dialog.showOpenDialog(getWindow(), { title: kind === 'folder' ? '导入本地音乐文件夹' : '导入本地音乐文件', properties: kind === 'folder' ? ['openDirectory'] : ['openFile', 'multiSelections'], filters: [{ name: '音频文件', extensions: ['mp3','wav','flac','ogg','m4a','aac'] }] });

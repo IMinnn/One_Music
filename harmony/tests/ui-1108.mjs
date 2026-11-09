@@ -24,7 +24,7 @@ try {
   assert.equal(await page.locator('#account-name').textContent(), '关联音乐平台账号');
   assert.equal(await page.locator('.search-box kbd').count(), 0);
   await click('navigate', 'tracks');
-  assert.equal(await page.locator('.source-logo').count(), 2);
+  assert.equal(await page.locator('.song-table .source-logo').count(), 2);
   await click('favorite', one);
   await page.waitForFunction(id => document.querySelector(`[data-action="favorite"][data-id="${id}"]`)?.getAttribute('aria-pressed') === 'true', one);
   assert.equal(await page.locator(`[data-action=favorite][data-id="${one}"] svg`).evaluate(el => getComputedStyle(el).fill), 'rgb(228, 65, 92)');
@@ -38,7 +38,7 @@ try {
   await page.screenshot({ path: 'test-results/player-unified-hover.png' });
   await page.locator('#player-lyric-line').click();
   await page.locator('.lyric-line').first().waitFor();
-  await click('navigate', 'home');
+  await page.locator('.sidebar .brand').click();
   await page.locator('#now-playing-info').click();
   await page.locator('.lyric-line').first().waitFor();
   console.log('PASS: 歌曲信息和歌词共用单个按钮、整体悬浮背景，两侧点击均打开播放页');
@@ -63,7 +63,8 @@ try {
   let library = (await page.request.get(f.url + '/api/library')).json();
   assert.equal((await library).tracks.length, 2);
   await click('navigate', 'favorites'); await click('track-more', one); await click('remove-favorite', one);
-  await page.waitForFunction(() => document.querySelectorAll('tr[data-track]').length === 0);
+  await page.waitForFunction(id => document.querySelector(`[data-action="favorite"][data-id="${id}"]`)?.getAttribute('aria-pressed') === 'false', one);
+  assert.equal(await page.locator('tr[data-track]').count(), 1);
   assert.equal((await (await page.request.get(f.url + '/api/library')).json()).tracks.length, 2);
   console.log('PASS: 从歌单/喜欢列表删除仅改变所属列表，资料库音乐保留');
   await click('settings');
@@ -99,7 +100,8 @@ try {
   await click('favorite', fileId); await click('navigate', 'favorites');
   assert.equal(await page.locator('tr[data-track]').count(), 1);
   await page.reload(); await page.locator('#app').waitFor({ state: 'visible' });
-  assert.equal(await page.locator('tr[data-track]').count(), 0);
+  await click('navigate', 'favorites');
+  assert.equal(await page.locator('tr[data-track]').count(), 1);
   assert.deepEqual(errors, []);
-  console.log('PASS: 本地文件 Blob 直接播放、无上传、不占服务端存储、当前会话喜欢、刷新不保留失效文件');
+  console.log('PASS: 本地文件 Blob 直接播放、无上传、不占服务端存储、元数据收藏持久化、失效本地引用待重新授权');
 } finally { await context.close(); await browser.close(); await f.close(); }

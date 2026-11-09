@@ -21,7 +21,7 @@ try{
  await page.goto(f.url);await page.locator('#library-tab-own').waitFor();
  await page.locator('#search').fill('音乐');await page.locator('#search-form').evaluate(el=>el.requestSubmit());
  await page.waitForFunction(()=>document.querySelectorAll('tr[data-track]').length===60);
- assert.deepEqual(await page.locator('.song-table th').allTextContents(), ['#','歌曲 / 艺人','专辑名','发表时间','平台播放量','平台收藏量','来源','操作']);
+ assert.deepEqual(await page.locator('.song-table th').allTextContents(), ['','歌曲 / 艺人','专辑名','发表时间','平台播放量','平台收藏量','来源','操作']);
  assert.equal(await page.locator('tbody .album-column').first().textContent(),'测试专辑');
  assert.equal(await page.locator('tbody .release-column').first().textContent(),'2020-01-02');
  assert.equal(await page.locator('tbody .plays-column').first().textContent(),'0');

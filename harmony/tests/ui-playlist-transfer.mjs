@@ -97,9 +97,10 @@ try {
     const unavailable = await b.request(`/tracks/${t.id}/audio`);
     assert.equal(unavailable.status, 409); assert.match(unavailable.data.error, new RegExp(source === 'qq' ? 'QQ 音乐' : '网易云音乐'));
     await page.locator(`[data-action=play][data-id="${t.id}"]`).click();
-    await page.getByRole('heading', { name: '连接平台后播放' }).waitFor();
-    assert.match(await page.locator('#dialog-content').textContent(), /可连接任意可用账号。/);
-    await page.locator(`[data-action=connect-import-platform][data-id="${source}"]`).click();
+    await page.waitForFunction(() => document.querySelector('#toast').textContent.includes('本轮歌曲均无法播放'));
+    assert.equal(await page.locator('audio').evaluate(a => a.paused), true);
+    await page.locator('.playback-connection-notice [data-action="import-connection-settings"]').first().click();
+    await page.locator(`[data-action="connect-provider"][data-id="${source}"]`).click();
     await page.waitForFunction(() => document.querySelector('.qr-image')?.naturalWidth > 50, null, { timeout: 5000 });
     await page.locator('#dialog [data-action=close-dialog]').first().click();
     await page.locator(`[data-action=open-list][data-id="${own.id}"]`).first().click();

@@ -2,6 +2,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('harmonyDesktop', Object.freeze({
   savePlaylistFile: input => ipcRenderer.invoke('playlists:save-file', input),
   listLocalFiles: () => ipcRenderer.invoke('local-files:list'),
+  removeLocalFiles: ids => ipcRenderer.invoke('local-files:remove', ids),
+  getPreferences: () => ipcRenderer.invoke('preferences:get'),
+  setPreferences: value => ipcRenderer.invoke('preferences:set', value),
+  getPlayback: key => ipcRenderer.invoke('playback:get', key),
+  savePlayback: (key, state) => ipcRenderer.send('playback:save', key, state),
   pickLocalFiles: kind => ipcRenderer.invoke('local-files:pick', kind),
   readLocalFile: id => ipcRenderer.invoke('local-files:read', id),
   startLocalMode: () => ipcRenderer.invoke('mode:local'),

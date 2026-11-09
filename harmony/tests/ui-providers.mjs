@@ -91,7 +91,7 @@ try {
       ? { status: 200, contentType: 'audio/wav', body: wav(10) }
       : { status: 403, contentType: 'application/json', body: JSON.stringify({ error: '此歌曲需要平台播放权限，请更换歌曲', code: 'PROVIDER_PLAYBACK_RESTRICTED' }) }));
     await click('play');
-    await page.waitForFunction(() => !document.querySelector('#toast').hidden && document.querySelector('#toast').textContent === '此歌曲需要平台播放权限，请更换歌曲');
+    await page.waitForFunction(() => !document.querySelector('#toast').hidden && document.querySelector('#toast').textContent.includes('此歌曲需要平台播放权限，请更换歌曲'));
     assert.equal(await page.locator('#account-name').textContent(), 'qrtest123');
     playable = true;
     await page.locator('#play-toggle').click();
