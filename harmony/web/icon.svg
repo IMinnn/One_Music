@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="One Music 应用图标">
+  <rect width="256" height="256" rx="58" fill="#376B53"/>
+  <g transform="translate(-3 0)">
+    <path d="M129 64c0-8 10-11 14-4 10 16 33 15 48 30 12 12 14 29 5 42-3-17-14-25-29-31-9-4-16-9-22-15Z" fill="#B9D8B7"/>
+    <path d="M129 64c4 8 10 15 16 22v76c0 21-20 39-46 40-21 1-38-10-38-27 0-18 20-34 43-35 9 0 18 2 25 6Z" fill="#F2F4E9"/>
+  </g>
+</svg>

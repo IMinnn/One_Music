@@ -1,0 +1,28 @@
+{
+  "name": "harmony-backend",
+  "version": "0.4.0",
+  "private": true,
+  "description": "和音独立后端：账号、平台适配、歌单、音频与数据存储",
+  "type": "module",
+  "main": "src/app.js",
+  "exports": {
+    ".": "./src/app.js",
+    "./db": "./src/db.js",
+    "./providers/*": "./src/providers/*.js",
+    "./local": "./src/local-app.js"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --watch --env-file-if-exists=.env src/index.js",
+    "test": "node --test --test-concurrency=1 tests/*.test.js"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4"
+  }
+}

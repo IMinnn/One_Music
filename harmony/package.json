@@ -1,0 +1,80 @@
+{
+  "name": "harmony-windows",
+  "version": "0.5.0",
+  "private": true,
+  "description": "和音音乐桌面客户端",
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "author": "Harmony",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "scripts": {
+    "start": "npm run preview",
+    "desktop": "electron .",
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
+    "test:ui": "node tests/ui.mjs",
+    "test:providers:ui": "node tests/ui-providers.mjs",
+    "test:portable": "node tests/portable.mjs",
+    "test:desktop": "node tests/desktop.mjs",
+    "icon": "node scripts/make-icon.mjs",
+    "dist": "electron-builder --win portable --x64",
+    "dist:dir": "electron-builder --win --x64 --dir",
+    "test:enhancements:ui": "node tests/ui-enhancements.mjs",
+    "test:local:references": "node tests/local-references.mjs",
+    "test:local:desktop": "node tests/desktop-local.mjs",
+    "preview": "node --watch scripts/preview.mjs",
+    "preview:background": "node scripts/start-preview.mjs",
+    "test:1108:ui": "node tests/ui-1108.mjs",
+    "test:playlists:ui": "node tests/ui-playlist-transfer.mjs",
+    "test:backend": "npm --prefix ../harmony-backend test",
+    "dist:mac": "bash scripts/build-mac.command",
+    "icon:mac": "node scripts/make-mac-icon.mjs"
+  },
+  "build": {
+    "appId": "com.harmony.music",
+    "productName": "和音",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "web/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "desktop/icon.ico",
+      "signExecutable": false
+    },
+    "artifactName": "Harmony-${version}-Windows-${arch}-portable.${ext}",
+    "portable": {
+      "requestExecutionLevel": "user"
+    },
+    "mac": {
+      "target": "zip",
+      "icon": "desktop/icon-mac.png",
+      "category": "public.app-category.music",
+      "identity": "-",
+      "artifactName": "Harmony-${version}-macOS-${arch}.${ext}"
+    }
+  },
+  "overrides": {
+    "app-builder-lib": {
+      "minimatch": "11.0.1"
+    },
+    "@electron/universal": {
+      "minimatch": "11.0.1"
+    }
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0",
+    "playwright": "1.65.0",
+    "qrcode": "1.5.4"
+  },
+  "dependencies": {
+    "harmony-backend": "file:../harmony-backend"
+  }
+}

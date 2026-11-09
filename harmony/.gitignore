@@ -1,0 +1,9 @@
+node_modules/
+release/
+.env
+data/
+.cache/
+build-cache/
+test-results/
+*.log
+.preview-data/

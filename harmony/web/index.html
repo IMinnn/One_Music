@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>和音 · One Music</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <div id="boot" class="boot"><img class="brand-mark" src="/icon.svg" alt=""><p>正在连接和音…</p></div>
+  <main id="auth" class="auth-layout" hidden>
+    <section class="auth-story">
+      <a class="brand" href="/"><img class="brand-mark" src="/icon.svg" alt=""><span>和音<small>One Music</small></span></a>
+      <div class="auth-copy"><div class="eyebrow">Bring your music together.</div><h1>把喜欢的音乐，<br>收在一起。</h1><p>收藏每一个心动的瞬间。<br>让歌单跟随你的账号，把音乐留给自己。</p><div class="record-art"><div class="record"></div><div class="record-cover"><small>A LITTLE SPACE</small><span>慢一点<br>听自己</span><b>ONE MUSIC COLLECTION</b></div></div></div>
+      <div class="auth-foot">专注音乐 · 简洁无广告 <span>桌面版 · 0.5.0</span></div>
+    </section>
+    <section class="auth-panel">
+      <div class="auth-card"><div class="eyebrow">WELCOME TO ONE MUSIC</div><h2 id="auth-title">欢迎回来</h2><p id="auth-subtitle" class="muted">登录账号，继续收藏你的日常。</p>
+        <div class="tabs" role="tablist" aria-label="账号操作"><button id="login-tab" role="tab" aria-selected="true" data-auth="login">登录</button><button id="register-tab" role="tab" aria-selected="false" data-auth="register">注册账号</button></div>
+        <form id="auth-form">
+          <label for="username">用户名</label><input id="username" name="username" autocomplete="username" minlength="3" maxlength="32" required placeholder="输入你的用户名" aria-describedby="username-hint"><small id="username-hint" class="field-hint">新账号仅支持数字和小写字母，3–32 位</small>
+          <label for="password">密码</label><div class="password-field"><input id="password" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" required placeholder="至少 8 位字符"><button type="button" id="show-password" aria-label="显示密码">显示</button></div>
+          <div id="confirm-field" hidden><label for="confirm-password">确认密码</label><input id="confirm-password" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="再次输入密码"></div>
+          <label class="checkbox"><input id="remember" type="checkbox" checked>保持登录 30 天</label>
+          <div id="auth-error" class="form-error" role="alert"></div><button class="btn primary full" id="auth-submit" type="submit">登录和音 <span>→</span></button>
+        </form><button type="button" id="guest-start" class="btn full local-mode-button" hidden>不登录，先在本地使用 <span>→</span></button><p id="guest-hint" class="auth-note" hidden>支持扫码绑定音乐平台，数据仅保存在此电脑。</p><p class="auth-note" id="auth-note">无需邮箱。用户名和密码由你设定。</p><p class="auth-privacy">歌单与收藏按账号保存。<br>请妥善保管密码，此版本暂不支持忘记密码找回。</p>
+      </div>
+    </section>
+  </main>
+  <div id="app" class="app-layout" hidden>
+    <aside class="sidebar"><a href="/" class="brand"><img class="brand-mark" src="/icon.svg" alt=""><span>和音<small>One Music</small></span></a><nav id="navigation" aria-label="主导航"></nav><div class="sidebar-bottom"><div class="sync-state" id="sync-state" role="status"><i></i>资料库已连接</div><button id="account-button" class="account-button" data-action="settings"><span id="avatar" class="avatar"></span><span class="account-copy"><b id="account-name"></b><small>账号与设置</small></span></button></div></aside>
+    <main class="main"><header class="topbar"><div class="breadcrumb" id="breadcrumb">现在聆听</div><form id="search-form" class="search-box"><span id="search-icon"></span><input id="search" placeholder="搜索歌曲、艺人、专辑" aria-label="搜索音乐"><button type="button" id="clear-search" class="icon-button" data-action="clear-search" aria-label="清空搜索" hidden>×</button><button type="submit" class="search-submit" aria-label="提交搜索">搜索</button></form></header><div id="content" class="content" tabindex="-1"></div></main>
+    <footer class="player" aria-label="音乐播放器"><button id="now-playing" class="now-playing" data-action="lyrics" title="打开播放页与歌词"><span id="now-playing-info" class="now-playing-info"><span class="mini-cover sage">♫</span><span><b>把喜欢的音乐，收在一起。</b><small>选择一首喜欢的歌</small></span></span><span id="player-lyric-line" class="player-lyric">选择一首喜欢的歌</span></button><div class="player-middle"><div class="transport"><button class="icon-button" data-action="previous" aria-label="上一首" id="previous"></button><button class="play-button" data-action="toggle-play" aria-label="播放" id="play-toggle"></button><button class="icon-button" data-action="next" aria-label="下一首" id="next"></button><div class="mode-control"><button class="icon-button" data-action="playback-mode" id="playback-mode" aria-label="列表循环" aria-describedby="playback-mode-tip"></button><span id="playback-mode-tip" class="control-tooltip" role="tooltip"></span></div></div><div class="seek-row"><span id="elapsed">0:00</span><input type="range" id="seek" min="0" max="100" value="0" step="0.1" aria-label="播放进度"><span id="duration">0:00</span></div></div><div class="player-end"><button class="icon-button lyric-toggle" data-action="lyrics" aria-label="打开歌词">词</button><button class="icon-button" id="desktop-lyrics" data-action="desktop-lyrics" aria-label="桌面歌词" title="桌面歌词" hidden>桌</button><span id="volume-icon"></span><input type="range" id="volume" min="0" max="1" value="0.7" step="0.01" aria-label="音量"><button class="icon-button" data-action="queue" id="queue-button" aria-label="待播队列"></button></div></footer>
+    <aside id="queue-panel" class="queue-panel" hidden aria-label="待播队列"></aside>
+  </div>
+  <input id="playlist-file-input" type="file" accept=".hy" aria-label="导入歌单文件" hidden>
+  <input id="file-input" type="file" multiple accept=".mp3,.wav,.flac,.ogg,.m4a,.aac" hidden>
+  <input id="folder-input" type="file" multiple webkitdirectory hidden>
+  <audio id="audio" preload="metadata"></audio>
+  <dialog id="dialog"><div id="dialog-content"></div></dialog>
+  <div id="toast" role="status" aria-live="polite" class="toast" hidden></div>
+</body>
+</html>

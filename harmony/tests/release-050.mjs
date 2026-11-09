@@ -1,0 +1,36 @@
+import { _electron as electron } from 'playwright';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { wav } from './helpers.js';
+const root=await mkdtemp(join(tmpdir(),'harmony-release-')),data=join(root,'profile'),music=join(root,'music');await mkdir(music);await writeFile(join(music,'发布验证.wav'),wav(10));
+const env={...process.env,HARMONY_USER_DATA:data,HARMONY_TEST_HIDDEN:'1'};delete env.ELECTRON_RUN_AS_NODE;
+let app;
+try {
+ console.log('启动EXE');
+ app=await electron.launch({executablePath:resolve('release/0.5.0/Windows-x64/win-unpacked/和音.exe'),args:[],env,timeout:45000});
+ console.log('连接窗口');
+ const page=await app.firstWindow();await page.locator('#guest-start').click();await page.locator('#library-tab-own').waitFor();
+ console.log('进入本地模式');
+ const info=await app.evaluate(({app})=>({version:app.getVersion(),packaged:app.isPackaged}));assert.equal(info.version,'0.5.0');assert.equal(info.packaged,true);
+ console.log('选择文件夹');
+ await app.evaluate(({dialog},dir)=>{dialog.showOpenDialog=async()=>({canceled:false,filePaths:[dir]});},music);
+ await page.locator('[data-action=navigate][data-id=local]').click();await page.locator('[data-action=import-folder]').click();await page.locator('tr[data-track]').waitFor();
+ assert.equal(await page.locator('audio').evaluate(a=>a.paused),true);
+ await page.locator('[data-action=play]').first().click();await page.waitForFunction(()=>document.querySelector('audio').currentTime>.1);
+ const headers=await page.locator('.song-table th').allTextContents();assert.ok(headers.includes('专辑名')&&headers.includes('发表时间'));assert.ok(!headers.includes('平台收藏量'));
+ console.log('创建歌单');
+ await page.locator('[data-action=new-list]').first().click();await page.locator('#list-name').fill('发布验证');await page.locator('#playlist-form [type=submit]').click();
+ await page.locator('[data-action=navigate][data-id=library]').click();
+ const save=join(root,'发布验证.hy');await app.evaluate(({dialog},path)=>{dialog.showSaveDialog=async()=>({canceled:false,filePath:path});},save);
+ await page.locator('[data-action=export-playlists]').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('已导出'));
+ const backup=JSON.parse(await readFile(save,'utf8'));assert.equal(backup.playlists[0].name,'发布验证');
+ await page.locator('#playlist-file-input').setInputFiles(save);await page.getByRole('heading',{name:'歌单导入完成'}).waitFor();
+ console.log('关闭并重启');
+ await app.close();app=null;
+ console.log('启动EXE');
+ app=await electron.launch({executablePath:resolve('release/0.5.0/Windows-x64/win-unpacked/和音.exe'),args:[],env,timeout:45000});
+ const reloaded=await app.firstWindow();await reloaded.locator('#library-tab-own').waitFor();await reloaded.locator('[data-action=navigate][data-id=local]').click();await reloaded.locator('tr[data-track]').waitFor();assert.equal(await reloaded.locator('tr[data-track]').count(),1);
+ console.log('PASS: 0.5.0 实际打包EXE启动，本地文件夹路径导入和播放，专辑日期列，系统保存桥接HY导出和重新导入，重启后音乐路径恢复');
+}finally{if(app)await app.close();await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:500});}

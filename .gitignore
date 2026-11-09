@@ -1,0 +1,31 @@
+# Dependencies and build output
+node_modules/
+release/
+build-cache/
+.cache/
+
+# Runtime data and local configuration
+.env
+.env.*
+!.env.example
+data/
+.preview-data/
+media/
+platform.key
+connection.json
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# Test output and system metadata
+test-results/
+*.log
+.DS_Store
+Thumbs.db
+
+# Local migration material and requirements
+/PROJECT_HANDOFF.md
+/迁移交接/
+/迁移清单.json
+/需求/
