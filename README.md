@@ -22,11 +22,11 @@
 
 | 平台 | 版本 | 下载状态 |
 | --- | --- | --- |
-| macOS · Apple 芯片（ARM64） | 0.5.0 | 已打包，待上传 |
-| macOS · Intel（x64） | 0.5.0 | 已打包，待上传 |
+| macOS · Apple 芯片（ARM64） | 0.5.0 | [下载 DMG](https://github.com/IMinnn/One_Music/releases/download/v0.5.0/Harmony-0.5.0-macOS-arm64.dmg) |
+| macOS · Intel（x64） | 0.5.0 | [下载 DMG](https://github.com/IMinnn/One_Music/releases/download/v0.5.0/Harmony-0.5.0-macOS-x64.dmg) |
 | Windows · x64 | — | ⚪ `暂未提供` |
 
-安装包发布后可在 [GitHub Releases](https://github.com/IMinnn/One_Music/releases) 下载。
+下载后打开 DMG，将和音拖入「应用程序」。详见 [v0.5.0 发布页](https://github.com/IMinnn/One_Music/releases/tag/v0.5.0)。
 
 ## 快速开始
 
@@ -66,7 +66,7 @@ npm run preview
 | Windows x64 便携版（在 Windows 构建） | `harmony/` | `npm run dist` |
 | macOS 安装包（在 Mac 构建，支持 Apple 芯片和 Intel） | `harmony/` | `npm run dist:mac` |
 
-当前桌面源码版本为 **0.5.0**，独立后端包版本为 **0.4.0**。源码仓库包含构建脚本，安装包在本地生成。
+当前桌面源码版本为 **0.5.0**，独立后端包版本为 **0.4.0**。也可使用上面的命令从源码构建安装包。
 
 - [客户端开发说明](harmony/README.md)
 - [后端运行与部署](harmony-backend/README.md)
