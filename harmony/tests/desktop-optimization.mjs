@@ -7,7 +7,7 @@ import { wav } from './helpers.js';
 const root=resolve(tmpdir()), userData=await mkdtemp(join(root,'harmony-optimization-'));
 const env={...process.env,HARMONY_USER_DATA:userData,HARMONY_TEST_HIDDEN:'1'};delete env.ELECTRON_RUN_AS_NODE;
 let app;
-async function launch(){app=await electron.launch({args:['.'],env,timeout:45000});const page=await app.firstWindow();await page.waitForLoadState('domcontentloaded');return page;}
+async function launch(){app=await electron.launch({...(process.env.HARMONY_TEST_EXE ? {executablePath:resolve(process.env.HARMONY_TEST_EXE),args:[]} : {args:['.']}),env,timeout:45000});const page=await app.firstWindow();await page.waitForLoadState('domcontentloaded');return page;}
 try{
  let page=await launch(); await page.locator('#guest-start').click(); await page.locator('#library-tab-own').waitFor();
  await page.locator('[data-action="navigate"][data-id="local"]').click();

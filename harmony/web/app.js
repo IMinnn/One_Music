@@ -585,7 +585,7 @@ function renderSettings() {
     <section class="settings-preferences" aria-label="偏好与应用信息">
       <div class="preference-row"><div><h3>关闭主窗口时</h3><p>托盘中可重新打开和音或退出应用。${window.harmonyDesktop ? '' : '网页中可预设，关闭行为在桌面客户端生效。'}</p></div><select id="close-action" aria-label="关闭主窗口时">${[['tray', '最小化到托盘'], ['ask', '每次询问'], ['quit', '退出应用']].map(([id, label]) => `<option value="${id}" ${closeAction === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
       <div class="preference-row"><div><h3>外观</h3><p>选择适合此刻的界面。</p></div><div class="theme-switch" role="group" aria-label="界面外观">${[['light', '浅色'], ['dark', '深色']].map(([id, label]) => `<button type="button" data-action="theme" data-id="${id}" aria-pressed="${theme === id}">${label}</button>`).join('')}</div></div>
-      <div class="preference-row about-harmony"><div><h3>关于和音 · One Music</h3><p>Bring your music together.</p></div><span class="version-label">桌面版 0.5.0</span></div>
+      <div class="preference-row about-harmony"><div><h3>关于和音 · One Music</h3><p>Bring your music together.</p></div><span class="version-label">桌面版 0.5.1</span></div>
     </section>
     <div class="settings-section-title"><div><h2>快捷键</h2><p>点击按键框并按下新组合。快捷键在和音窗口内生效，输入文字时暂停响应。</p></div><button class="text-button" data-action="reset-shortcuts">恢复默认</button></div>
     <section class="settings-preferences shortcut-settings" aria-label="快捷键设置">${Object.entries({ 'toggle-play': '播放 / 暂停', previous: '上一首', next: '下一首', search: '搜索音乐', 'new-list': '新建歌单' }).map(([id, label]) => `<div class="preference-row"><label for="shortcut-${id}">${label}</label><input class="shortcut-input" id="shortcut-${id}" data-shortcut="${id}" aria-label="${label}快捷键" value="${esc(shortcuts[id])}" readonly></div>`).join('')}</section>

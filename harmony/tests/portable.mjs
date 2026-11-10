@@ -31,7 +31,7 @@ try {
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   const page = browser.contexts()[0].pages()[0];
   await page.locator('#auth').waitFor({ state: 'visible' });
-  assert.equal(await page.title(), '和音 · 让音乐回到音乐');
+  assert.equal(await page.title(), '和音 · One Music');
   await page.locator('#register-tab').click(); await page.locator('#username').fill('portable123');
   await page.locator('#password').fill('Portable-password-123'); await page.locator('#confirm-password').fill('Portable-password-123');
   await page.locator('#auth-submit').click();
@@ -54,7 +54,7 @@ try {
     await page.locator('[data-action="close-dialog"]').click();
     await page.locator('#dialog').waitFor({ state: 'hidden' });
   }
-  await page.evaluate(() => window.close());
+  await page.evaluate(async () => { await window.harmonyDesktop.setPreferences({closeAction:'quit'}); window.close(); });
   await Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(new Error('Portable did not exit')), 15000))]);
   console.log('Portable PASS: self-extracting EXE, registration, desktop lyrics, hidden configuration and clean exit' + (process.env.HARMONY_LIVE_PROVIDERS === '1' ? ', both real platform QR images' : ''));
 } finally {

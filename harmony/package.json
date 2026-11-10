@@ -1,6 +1,6 @@
 {
   "name": "harmony-windows",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "和音音乐桌面客户端",
   "type": "module",
@@ -41,7 +41,9 @@
     "files": [
       "desktop/**/*",
       "web/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/harmony-backend/{tests,test-results,docs,scripts,data,.preview-data}/**/*",
+      "!node_modules/harmony-backend/{*.log,.env,.env.*,AGENTS.md,Dockerfile,.dockerignore}"
     ],
     "win": {
       "target": "portable",
