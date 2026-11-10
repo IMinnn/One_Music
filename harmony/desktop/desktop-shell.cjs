@@ -134,6 +134,11 @@ function createDesktopShell(getOrigin, getBackend) {
     window.setMenu(null);
     window.on('close', async event => {
       if (closing) return;
+      if (process.platform === 'darwin') {
+        event.preventDefault();
+        window.minimize();
+        return;
+      }
       const action = preferences().closeAction;
       if (action === 'quit') { event.preventDefault(); app.quit(); return; }
       event.preventDefault();

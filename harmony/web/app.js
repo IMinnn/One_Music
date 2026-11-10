@@ -583,7 +583,10 @@ function renderSettings() {
       <p class="connection-hint">${icon('info')}扫码连接后可同步个人歌单，并按平台权限播放音乐。</p>
     </section>
     <section class="settings-preferences" aria-label="偏好与应用信息">
-      <div class="preference-row"><div><h3>关闭主窗口时</h3><p>托盘中可重新打开和音或退出应用。${window.harmonyDesktop ? '' : '网页中可预设，关闭行为在桌面客户端生效。'}</p></div><select id="close-action" aria-label="关闭主窗口时">${[['tray', '最小化到托盘'], ['ask', '每次询问'], ['quit', '退出应用']].map(([id, label]) => `<option value="${id}" ${closeAction === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+      <div class="preference-row">
+        <div><h3>关闭主窗口时</h3><p>${window.harmonyDesktop?.minimizeOnClose ? '窗口会最小化，可从程序坞恢复。' : `托盘中可重新打开和音或退出应用。${window.harmonyDesktop ? '' : '网页中可预设，关闭行为在桌面客户端生效。'}`}</p></div>
+        ${window.harmonyDesktop?.minimizeOnClose ? '' : `<select id="close-action" aria-label="关闭主窗口时">${[['tray', '最小化到托盘'], ['ask', '每次询问'], ['quit', '退出应用']].map(([id, label]) => `<option value="${id}" ${closeAction === id ? 'selected' : ''}>${label}</option>`).join('')}</select>`}
+      </div>
       <div class="preference-row"><div><h3>外观</h3><p>选择适合此刻的界面。</p></div><div class="theme-switch" role="group" aria-label="界面外观">${[['light', '浅色'], ['dark', '深色']].map(([id, label]) => `<button type="button" data-action="theme" data-id="${id}" aria-pressed="${theme === id}">${label}</button>`).join('')}</div></div>
       <div class="preference-row about-harmony"><div><h3>关于和音 · One Music</h3><p>Bring your music together.</p></div><span class="version-label">桌面版 0.5.1</span></div>
     </section>

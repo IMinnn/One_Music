@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld('harmonyDesktop', Object.freeze({
   pickLocalFiles: kind => ipcRenderer.invoke('local-files:pick', kind),
   readLocalFile: id => ipcRenderer.invoke('local-files:read', id),
   startLocalMode: () => ipcRenderer.invoke('mode:local'),
-  ...(process.platform === 'darwin' ? {} : {
+  ...(process.platform === 'darwin' ? { minimizeOnClose: true } : {
     openAccountMode: () => ipcRenderer.invoke('mode:account'),
     loginAccount: input => ipcRenderer.invoke('account:login', input),
     accountSignedIn: () => ipcRenderer.invoke('account:signed-in'),
