@@ -22,13 +22,13 @@
 
 | 平台 | 版本 | 下载状态 |
 | --- | --- | --- |
-| macOS · Apple 芯片（ARM64） | 0.5.0 | [下载 DMG](https://github.com/IMinnn/One_Music/releases/download/v0.5.0/Harmony-0.5.0-macOS-arm64.dmg) |
-| macOS · Intel（x64） | 0.5.0 | [下载 DMG](https://github.com/IMinnn/One_Music/releases/download/v0.5.0/Harmony-0.5.0-macOS-x64.dmg) |
+| macOS · Apple 芯片（ARM64） | 0.5.1 | [下载 DMG](https://github.com/IMinnn/One_Music/releases/download/v0.5.1/Harmony-0.5.1-macOS-arm64.dmg) |
+| macOS · Intel（x64） | 0.5.1 | [下载 DMG](https://github.com/IMinnn/One_Music/releases/download/v0.5.1/Harmony-0.5.1-macOS-x64.dmg) |
 | Windows · x64 | 0.5.1 | [下载 EXE](https://github.com/IMinnn/One_Music/releases/download/v0.5.1/Harmony-0.5.1-Windows-x64-portable.exe) |
 
 Windows 下载后双击 EXE 即可运行。首次启动需要解压，请稍候。详见 [Windows v0.5.1 发布页](https://github.com/IMinnn/One_Music/releases/tag/v0.5.1)。
 
-macOS 下载后打开 DMG，将和音拖入「应用程序」。详见 [macOS v0.5.0 发布页](https://github.com/IMinnn/One_Music/releases/tag/v0.5.0)。
+macOS 下载后打开 DMG，将和音拖入「应用程序」。详见 [macOS v0.5.1 发布页](https://github.com/IMinnn/One_Music/releases/tag/v0.5.1)。
 
 ## 快速开始
 
